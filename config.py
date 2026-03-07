@@ -5,28 +5,19 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    # Telegram Bot Token (получить у @BotFather)
+    # Telegram Bot Token
     BOT_TOKEN: str
 
-    # OpenRouter API Key
-    # https://openrouter.ai/keys
+    # OpenRouter API Key — https://openrouter.ai/keys
     OPENROUTER_API_KEY: str
 
-    # Модель на OpenRouter (можно менять без изменения кода)
-    # Примеры: "anthropic/claude-3.5-sonnet", "google/gemini-flash-1.5",
-    #          "meta-llama/llama-3.1-70b-instruct", "openai/gpt-4o-mini"
+    # Модель OpenRouter
     OPENROUTER_MODEL: str = "anthropic/claude-3.5-sonnet"
 
-    # Telethon — для чтения публичных каналов
-    # Получить на https://my.telegram.org/apps
-    TELEGRAM_API_ID: int = 0
-    TELEGRAM_API_HASH: str = ""
-    TELEGRAM_SESSION_STRING: str = ""  # Заполняется после авторизации
-
-    # Сколько часов между дайджестами (по умолчанию)
+    # Интервал между дайджестами (часы)
     DEFAULT_DIGEST_INTERVAL_HOURS: int = 4
 
-    # Сколько последних постов брать с каждого канала
+    # Постов с каждого канала
     POSTS_PER_CHANNEL: int = 20
 
     # Максимум новостей в дайджесте
