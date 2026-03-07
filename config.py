@@ -18,10 +18,10 @@ class Settings(BaseSettings):
     DEFAULT_DIGEST_INTERVAL_HOURS: int = 3
 
     # Постов с каждого канала
-    POSTS_PER_CHANNEL: int = 20
+    POSTS_PER_CHANNEL: int = 25
 
     # Максимум новостей в дайджесте
-    MAX_NEWS_IN_DIGEST: int = 10
+    MAX_NEWS_IN_DIGEST: int = 30
 
     # Язык дайджеста (ru / en)
     DIGEST_LANGUAGE: str = "ru"
