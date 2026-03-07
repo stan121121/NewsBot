@@ -31,7 +31,7 @@ CATEGORIES_EN = ["Politics", "Economy", "Society", "Technology",
 LANG_PROMPTS = {
     "ru": {
         "system": (
-            "Ты — умный редактор новостного дайджеста. Твоя задача: из потока постов "
+            "Ты — умный редактор новостного дайджеста и отличный аналитик новостей.Журналистика - это твое!. Твоя задача: из потока постов "
             "отобрать ТОЛЬКО действительно важные новости, отфильтровав:\n"
             "• рекламу и промо-посты\n"
             "• репосты без смысловой ценности\n"
@@ -125,8 +125,8 @@ async def summarize_posts(posts: list[Post]) -> list[DigestItem]:
 
     payload = {
         "model": settings.OPENROUTER_MODEL,
-        "max_tokens": 2000,  # при необходимости можно уменьшить
-        "temperature": 0.3,
+        "max_tokens": 3000,  # при необходимости можно уменьшить
+        "temperature": 0.5,
         "messages": [
             {"role": "system", "content": prompts["system"]},
             {"role": "user",   "content": user_msg},
