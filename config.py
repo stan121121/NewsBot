@@ -19,8 +19,8 @@ class Settings(BaseSettings):
 
     # Telethon — для чтения публичных каналов
     # Получить на https://my.telegram.org/apps
-    TELEGRAM_API_ID: int
-    TELEGRAM_API_HASH: str
+    TELEGRAM_API_ID: int = 0
+    TELEGRAM_API_HASH: str = ""
     TELEGRAM_SESSION_STRING: str = ""  # Заполняется после авторизации
 
     # Сколько часов между дайджестами (по умолчанию)
