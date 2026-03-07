@@ -1,18 +1,26 @@
 """
-summarizer.py — фильтрация и суммаризация новостей через Claude AI
+summarizer.py — фильтрация и суммаризация новостей через OpenRouter
+OpenRouter — OpenAI-совместимый прокси: https://openrouter.ai/docs
 """
 import json
 import logging
 from dataclasses import dataclass
 
-import anthropic
+import httpx
 
 from channel_reader import Post
 from config import settings
 
 logger = logging.getLogger(__name__)
 
-client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+HEADERS = {
+    "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+    "Content-Type": "application/json",
+    "HTTP-Referer": "https://github.com/newsdigestbot",   # рекомендует OpenRouter
+    "X-Title": "News Digest Bot",
+}
 
 LANG_PROMPTS = {
     "ru": {
@@ -23,42 +31,41 @@ LANG_PROMPTS = {
             "• репосты без смысловой ценности\n"
             "• мелкие незначимые события\n"
             "• повторяющийся контент\n"
-            "Отвечай СТРОГО в формате JSON. Без пояснений вне JSON."
+            "Отвечай СТРОГО в формате JSON-массива. Без пояснений вне JSON. "
+            "Без markdown-бэктиков. Только чистый JSON."
         ),
         "user_tmpl": (
             "Вот {count} постов из Telegram-каналов за последние часы.\n"
             "Выбери не более {max_news} самых важных и значимых.\n"
-            "Для каждой новости верни:\n"
-            '  "title" — заголовок (до 80 символов)\n'
-            '  "summary" — краткое изложение (2–3 предложения)\n'
+            "Для каждой новости верни объект:\n"
+            '  "title"      — заголовок (до 80 символов)\n'
+            '  "summary"    — краткое изложение (2–3 предложения)\n'
             '  "importance" — оценка важности 1–10\n'
-            '  "channel" — название канала\n'
-            '  "url" — ссылка на пост\n\n'
+            '  "channel"    — название канала\n'
+            '  "url"        — ссылка на пост\n\n'
             "Посты:\n{posts_text}\n\n"
-            'Верни JSON массив: [{{"title":..., "summary":..., "importance":..., "channel":..., "url":...}}, ...]'
+            "Верни только JSON-массив, например:\n"
+            '[{{"title":"...", "summary":"...", "importance":8, "channel":"...", "url":"..."}}]'
         ),
     },
     "en": {
         "system": (
-            "You are a smart news digest editor. Your task: from a stream of posts, "
-            "select ONLY genuinely important news, filtering out:\n"
-            "• ads and promo posts\n"
-            "• reposts without meaningful value\n"
-            "• minor insignificant events\n"
-            "• duplicate content\n"
-            "Reply STRICTLY in JSON format. No explanations outside JSON."
+            "You are a smart news digest editor. From a stream of posts select ONLY genuinely "
+            "important news, filtering out: ads, reposts without value, minor events, duplicates.\n"
+            "Reply STRICTLY as a JSON array. No text outside JSON. No markdown backticks."
         ),
         "user_tmpl": (
             "Here are {count} posts from Telegram channels over the past few hours.\n"
             "Select no more than {max_news} most important ones.\n"
-            "For each news item return:\n"
-            '  "title" — headline (up to 80 chars)\n'
-            '  "summary" — brief summary (2–3 sentences)\n'
-            '  "importance" — importance score 1–10\n'
-            '  "channel" — channel name\n'
-            '  "url" — link to post\n\n'
+            "For each return:\n"
+            '  "title"      — headline (up to 80 chars)\n'
+            '  "summary"    — 2–3 sentence summary\n'
+            '  "importance" — score 1–10\n'
+            '  "channel"    — channel name\n'
+            '  "url"        — post link\n\n'
             "Posts:\n{posts_text}\n\n"
-            'Return a JSON array: [{{"title":..., "summary":..., "importance":..., "channel":..., "url":...}}, ...]'
+            "Return only a JSON array:\n"
+            '[{{"title":"...", "summary":"...", "importance":8, "channel":"...", "url":"..."}}]'
         ),
     },
 }
@@ -88,7 +95,7 @@ def _format_posts_for_prompt(posts: list[Post]) -> str:
 
 
 async def summarize_posts(posts: list[Post]) -> list[DigestItem]:
-    """Отправить посты в Claude, получить отфильтрованный дайджест."""
+    """Отправить посты в OpenRouter, получить отфильтрованный дайджест."""
     if not posts:
         return []
 
@@ -102,20 +109,35 @@ async def summarize_posts(posts: list[Post]) -> list[DigestItem]:
         posts_text=posts_text,
     )
 
-    logger.info("Sending %d posts to Claude for summarization...", len(posts))
+    payload = {
+        "model": settings.OPENROUTER_MODEL,
+        "max_tokens": 2000,
+        "temperature": 0.3,
+        "messages": [
+            {"role": "system", "content": prompts["system"]},
+            {"role": "user",   "content": user_msg},
+        ],
+    }
+
+    logger.info(
+        "Sending %d posts to OpenRouter (model: %s)...",
+        len(posts),
+        settings.OPENROUTER_MODEL,
+    )
 
     try:
-        response = await client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=2000,
-            system=prompts["system"],
-            messages=[{"role": "user", "content": user_msg}],
-        )
-        raw = response.content[0].text.strip()
+        async with httpx.AsyncClient(timeout=60.0) as http:
+            resp = await http.post(OPENROUTER_URL, json=payload, headers=HEADERS)
+            resp.raise_for_status()
+            data = resp.json()
 
-        # Убираем возможные маркдаун-бэктики
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
+        raw: str = data["choices"][0]["message"]["content"].strip()
+
+        # Убираем возможные маркдаун-бэктики, которые модель всё равно вставляет
+        if "```" in raw:
+            parts = raw.split("```")
+            # берём первый блок после открывающего бэктика
+            raw = parts[1] if len(parts) > 1 else parts[0]
             if raw.startswith("json"):
                 raw = raw[4:]
         raw = raw.strip()
@@ -123,26 +145,42 @@ async def summarize_posts(posts: list[Post]) -> list[DigestItem]:
         items_data: list[dict] = json.loads(raw)
         items = [
             DigestItem(
-                title=d.get("title", ""),
-                summary=d.get("summary", ""),
+                title=str(d.get("title", "")).strip(),
+                summary=str(d.get("summary", "")).strip(),
                 importance=int(d.get("importance", 5)),
-                channel=d.get("channel", ""),
-                url=d.get("url", ""),
+                channel=str(d.get("channel", "")).strip(),
+                url=str(d.get("url", "")).strip(),
             )
             for d in items_data
+            if isinstance(d, dict)
         ]
-        # Сортируем по важности
         items.sort(key=lambda x: x.importance, reverse=True)
-        logger.info("Got %d digest items from Claude", len(items))
+        logger.info("Got %d digest items from OpenRouter", len(items))
+
+        # Логируем стоимость если API вернул
+        usage = data.get("usage", {})
+        if usage:
+            logger.info(
+                "Tokens used — prompt: %s, completion: %s",
+                usage.get("prompt_tokens", "?"),
+                usage.get("completion_tokens", "?"),
+            )
+
         return items
 
+    except httpx.HTTPStatusError as e:
+        logger.error("OpenRouter HTTP error %s: %s", e.response.status_code, e.response.text)
+        return []
+    except json.JSONDecodeError as e:
+        logger.error("JSON parse error: %s | raw response: %.300s", e, raw)
+        return []
     except Exception as e:
         logger.error("Summarization error: %s", e)
         return []
 
 
 def format_digest_message(items: list[DigestItem], lang: str = "ru") -> str:
-    """Форматировать дайджест в Telegram-сообщение."""
+    """Форматировать дайджест в Telegram-сообщение (Markdown)."""
     if not items:
         if lang == "ru":
             return "📭 Новостей нет — всё тихо."
@@ -153,15 +191,21 @@ def format_digest_message(items: list[DigestItem], lang: str = "ru") -> str:
 
     importance_emoji = {10: "🔴", 9: "🔴", 8: "🟠", 7: "🟠", 6: "🟡", 5: "🟡"}
 
-    for i, item in enumerate(items, 1):
+    for item in items:
         emoji = importance_emoji.get(item.importance, "🟢")
+        # Экранируем символы Markdown в title
+        safe_title = item.title.replace("*", "\\*").replace("_", "\\_")
         lines.append(
-            f"{emoji} *{item.title}*\n"
+            f"{emoji} *{safe_title}*\n"
             f"{item.summary}\n"
             f"_📣 {item.channel}_ | [Читать →]({item.url})\n"
         )
 
-    footer = "\n⏰ _Следующий дайджест через несколько часов_" if lang == "ru" else "\n⏰ _Next digest in a few hours_"
+    model_short = settings.OPENROUTER_MODEL.split("/")[-1]
+    footer = (
+        f"\n⏰ _Следующий дайджест через {settings.DEFAULT_DIGEST_INTERVAL_HOURS} ч._"
+        f"\n🤖 _{model_short}_"
+    )
     lines.append(footer)
 
     return "\n".join(lines)
