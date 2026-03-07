@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     OPENROUTER_API_KEY: str
 
     # Модель OpenRouter
-    OPENROUTER_MODEL: str = "anthropic/claude-3.5-sonnet"
+    OPENROUTER_MODEL: str = "google/gemini-flash-1.5"
 
     # Интервал между дайджестами (часы)
     DEFAULT_DIGEST_INTERVAL_HOURS: int = 1
