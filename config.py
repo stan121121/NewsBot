@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     OPENROUTER_API_KEY: str
 
     # Модель OpenRouter
-    OPENROUTER_MODEL: str = "nvidia/llama-nemotron-embed-vl-1b-v2"
+    OPENROUTER_MODEL: str = "anthropic/claude-3.5-sonnet"
 
     # Интервал между дайджестами (часы)
     DEFAULT_DIGEST_INTERVAL_HOURS: int = 1
