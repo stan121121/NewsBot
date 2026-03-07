@@ -84,7 +84,7 @@ async def _send_user_digest(bot, db, client, user_id, channels, since_hours):
     await bot.send_message(
         chat_id=user_id,
         text=msg,
-        parse_mode="Markdown",
+        parse_mode="HTML",
         disable_web_page_preview=True,
     )
 
