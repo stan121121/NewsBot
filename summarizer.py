@@ -13,7 +13,7 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_URL = "https://openrouter.ai/api/v1/"
 
 HEADERS = {
     "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
