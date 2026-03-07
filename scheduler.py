@@ -22,41 +22,32 @@ async def run_digest(bot: Bot, db: Database):
         logger.info("No active users, skipping.")
         return
 
-    # Один клиент Telethon на весь прогон
-    client = await get_telethon_client()
-
-    try:
-        for user in users:
-            uid = user["user_id"]
-            channels = await db.get_user_channels(uid)
-            if not channels:
-                continue
-
-            interval_h = user.get("interval_h", settings.DEFAULT_DIGEST_INTERVAL_HOURS)
-
-            try:
-                await _send_user_digest(
-                    bot=bot,
-                    db=db,
-                    client=client,
-                    user_id=uid,
-                    channels=channels,
-                    since_hours=interval_h,
-                )
-            except TelegramForbiddenError:
-                logger.warning("User %d blocked the bot, deactivating.", uid)
-                # Помечаем как неактивного, не ломаем цикл
-            except Exception as e:
-                logger.error("Digest error for user %d: %s", uid, e)
-    finally:
-        await client.disconnect()
+    for user in users:
+        uid = user["user_id"]
+        channels = await db.get_user_channels(uid)
+        if not channels:
+            continue
+        interval_h = user.get("interval_h", settings.DEFAULT_DIGEST_INTERVAL_HOURS)
+        try:
+            await _send_user_digest(
+                bot=bot,
+                db=db,
+                client=None,
+                user_id=uid,
+                channels=channels,
+                since_hours=interval_h,
+            )
+        except TelegramForbiddenError:
+            logger.warning("User %d blocked the bot, deactivating.", uid)
+        except Exception as e:
+            logger.error("Digest error for user %d: %s", uid, e)
 
     logger.info("=== Digest job done ===")
 
 
 async def _send_user_digest(bot, db, client, user_id, channels, since_hours):
+    # client игнорируется — scraper не нуждается в Telethon
     posts = await fetch_all_user_channels(
-        client,
         channels,
         limit_per_channel=settings.POSTS_PER_CHANNEL,
         since_hours=since_hours,
@@ -78,7 +69,6 @@ async def _send_user_digest(bot, db, client, user_id, channels, since_hours):
         return
 
     digest_items = await summarize_posts(new_posts)
-
     msg = format_digest_message(digest_items, lang=settings.DIGEST_LANGUAGE)
 
     await bot.send_message(
@@ -88,14 +78,11 @@ async def _send_user_digest(bot, db, client, user_id, channels, since_hours):
         disable_web_page_preview=True,
     )
 
-    # Помечаем посты как виденные
     for post in new_posts:
         await db.mark_seen(user_id, post.channel, [post.id])
 
     await db.log_digest(user_id, len(digest_items))
     logger.info(
         "User %d: digest sent (%d items from %d posts).",
-        user_id,
-        len(digest_items),
-        len(new_posts),
+        user_id, len(digest_items), len(new_posts),
     )
