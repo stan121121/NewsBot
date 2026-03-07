@@ -8,8 +8,14 @@ class Settings(BaseSettings):
     # Telegram Bot Token (получить у @BotFather)
     BOT_TOKEN: str
 
-    # Anthropic API Key для суммаризации
-    ANTHROPIC_API_KEY: str
+    # OpenRouter API Key
+    # https://openrouter.ai/keys
+    OPENROUTER_API_KEY: str
+
+    # Модель на OpenRouter (можно менять без изменения кода)
+    # Примеры: "anthropic/claude-3.5-sonnet", "google/gemini-flash-1.5",
+    #          "meta-llama/llama-3.1-70b-instruct", "openai/gpt-4o-mini"
+    OPENROUTER_MODEL: str = "anthropic/claude-3.5-sonnet"
 
     # Telethon — для чтения публичных каналов
     # Получить на https://my.telegram.org/apps
