@@ -1,7 +1,12 @@
 """
 handlers.py — команды бота
+FIXES:
+  - parse_mode="HTML" везде (Markdown ломается на _ в username)
+  - parse_channel_input() парсит https://t.me/rbc_news → rbc_news
+  - убран дублирующий хендлер AddChannel.waiting_for_username
 """
 import logging
+import re
 
 from aiogram import Router, F
 from aiogram.filters import Command, CommandStart
@@ -17,6 +22,37 @@ router = Router()
 logger = logging.getLogger(__name__)
 
 
+# ── Утилиты ──────────────────────────────────────────────────────
+def parse_channel_input(raw: str) -> str | None:
+    """
+    Принимает любой формат, возвращает чистый username (строчные, без @).
+
+    Поддерживает:
+      https://t.me/rbc_news  →  rbc_news
+      t.me/rbc_news          →  rbc_news
+      @rbc_news              →  rbc_news
+      rbc_news               →  rbc_news
+    """
+    raw = raw.strip()
+    # t.me URL
+    m = re.match(r"(?:https?://)?t(?:elegram)?\.me/([A-Za-z0-9_]{3,})", raw, re.IGNORECASE)
+    if m:
+        return m.group(1).lower()
+    # инвайт-ссылки не поддерживаем
+    if "joinchat" in raw or "+" in raw:
+        return None
+    # @username / username
+    username = raw.lstrip("@").strip().lower()
+    if re.match(r"^[A-Za-z0-9_]{3,}$", username):
+        return username
+    return None
+
+
+def he(text: str) -> str:
+    """Минимальный HTML-escape для Telegram parse_mode=HTML."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 # ── FSM ──────────────────────────────────────────────────────────
 class AddChannel(StatesGroup):
     waiting_for_username = State()
@@ -26,7 +62,7 @@ class SetInterval(StatesGroup):
     waiting_for_hours = State()
 
 
-# ── Хелперы ──────────────────────────────────────────────────────
+# ── Клавиатура ───────────────────────────────────────────────────
 def main_keyboard():
     return ReplyKeyboardMarkup(
         keyboard=[
@@ -45,60 +81,68 @@ async def cmd_start(message: Message, db):
     await message.answer(
         "👋 Привет! Я собираю новости из Telegram-каналов и присылаю тебе "
         "только самое важное — без шума.\n\n"
-        "*Как это работает:*\n"
+        "<b>Как это работает:</b>\n"
         "1️⃣ Добавь каналы командой /add или кнопкой\n"
         "2️⃣ Каждые несколько часов я читаю новые посты\n"
         "3️⃣ AI отбирает самые важные и присылает дайджест\n\n"
-        "Нажми *«📰 Дайджест сейчас»* чтобы попробовать сразу!",
-        parse_mode="Markdown",
+        "Нажми <b>«📰 Дайджест сейчас»</b> чтобы попробовать сразу!",
+        parse_mode="HTML",
         reply_markup=main_keyboard(),
     )
 
 
-# ── /help ────────────────────────────────────────────────────────
+# ── /help ─────────────────────────────────────────────────────────
 @router.message(Command("help"))
 @router.message(F.text == "ℹ️ Помощь")
 async def cmd_help(message: Message):
     await message.answer(
-        "📖 *Команды:*\n\n"
-        "/add `@channel` — добавить канал\n"
-        "/remove `@channel` — удалить канал\n"
+        "📖 <b>Команды:</b>\n\n"
+        "/add <code>@channel</code> — добавить канал\n"
+        "/remove <code>@channel</code> — удалить канал\n"
         "/channels — список каналов\n"
-        "/interval `часы` — изменить интервал (напр. `/interval 6`)\n"
+        "/interval <code>часы</code> — изменить интервал (напр. <code>/interval 6</code>)\n"
         "/digest — получить дайджест прямо сейчас\n\n"
-        "Каналы можно добавлять по username (например `@bbcrussian`) "
-        "или просто `bbcrussian`.",
-        parse_mode="Markdown",
+        "Форматы для /add:\n"
+        "• <code>@bbcrussian</code>\n"
+        "• <code>bbcrussian</code>\n"
+        "• <code>https://t.me/bbcrussian</code>",
+        parse_mode="HTML",
     )
 
 
-# ── Список каналов ───────────────────────────────────────────────
+# ── Список каналов ────────────────────────────────────────────────
 @router.message(Command("channels"))
 @router.message(F.text == "📋 Мои каналы")
 async def cmd_channels(message: Message, db):
     channels = await db.get_user_channels(message.from_user.id)
     if not channels:
         await message.answer(
-            "У тебя пока нет каналов. Добавь первый через /add или кнопку ➕"
+            "У тебя пока нет каналов. Добавь первый через /add или кнопку ➕",
+            reply_markup=main_keyboard(),
         )
         return
-    text = "📋 *Твои каналы:*\n\n" + "\n".join(f"• @{ch}" for ch in channels)
-    await message.answer(text, parse_mode="Markdown")
+    lines = "\n".join(f"• @{he(ch)}" for ch in channels)
+    await message.answer(
+        f"📋 <b>Твои каналы:</b>\n\n{lines}",
+        parse_mode="HTML",
+        reply_markup=main_keyboard(),
+    )
 
 
-# ── Добавление канала ────────────────────────────────────────────
+# ── Добавление канала ─────────────────────────────────────────────
 @router.message(Command("add"))
 @router.message(F.text == "➕ Добавить канал")
-async def cmd_add_start(message: Message, state: FSMContext):
-    # Если username передан сразу: /add @channel
-    parts = message.text.split()
-    if len(parts) >= 2 and parts[0] == "/add":
-        await _do_add_channel(message, parts[1], state)
+async def cmd_add_start(message: Message, state: FSMContext, db):
+    parts = message.text.split(maxsplit=1)
+    if len(parts) == 2 and parts[0] == "/add":
+        await _do_add_channel(message, parts[1], db=db)
         return
     await state.set_state(AddChannel.waiting_for_username)
     await message.answer(
-        "Отправь username канала (например `@bbcrussian` или `ria_novosti`):",
-        parse_mode="Markdown",
+        "Отправь username или ссылку на канал:\n\n"
+        "<code>@bbcrussian</code>\n"
+        "<code>https://t.me/bbcrussian</code>",
+        parse_mode="HTML",
         reply_markup=ReplyKeyboardRemove(),
     )
 
@@ -109,68 +153,69 @@ async def cmd_add_username(message: Message, state: FSMContext, db):
     await _do_add_channel(message, message.text.strip(), db=db)
 
 
-async def _do_add_channel(message: Message, raw: str, state: FSMContext = None, db=None):
+async def _do_add_channel(message: Message, raw: str, db=None):
     if db is None:
-        # В роутере db приходит через data
         return
-    username = raw.lower().lstrip("@").strip()
-    if not username:
-        await message.answer("❌ Некорректный username.", reply_markup=main_keyboard())
+    username = parse_channel_input(raw)
+    if username is None:
+        await message.answer(
+            "❌ Не удалось распознать канал.\n\n"
+            "Отправь в формате <code>@username</code> или <code>https://t.me/username</code>",
+            parse_mode="HTML",
+            reply_markup=main_keyboard(),
+        )
         return
-
     added = await db.add_channel(message.from_user.id, username)
     if added:
         await message.answer(
-            f"✅ Канал @{username} добавлен!\n\nТеперь я буду следить за ним.",
+            f"✅ Канал <code>@{he(username)}</code> добавлен!",
+            parse_mode="HTML",
             reply_markup=main_keyboard(),
         )
     else:
         await message.answer(
-            f"⚠️ Канал @{username} уже в списке.", reply_markup=main_keyboard()
+            f"⚠️ Канал <code>@{he(username)}</code> уже в списке.",
+            parse_mode="HTML",
+            reply_markup=main_keyboard(),
         )
 
 
-# Обработчик когда db доступна через middleware
-@router.message(AddChannel.waiting_for_username)
-async def cmd_add_username_with_db(message: Message, state: FSMContext, db):
-    await state.clear()
-    username = message.text.strip().lower().lstrip("@")
-    if not username:
-        await message.answer("❌ Некорректный username.", reply_markup=main_keyboard())
-        return
-    added = await db.add_channel(message.from_user.id, username)
-    if added:
-        await message.answer(f"✅ Канал @{username} добавлен!", reply_markup=main_keyboard())
-    else:
-        await message.answer(f"⚠️ @{username} уже в списке.", reply_markup=main_keyboard())
-
-
-# ── Удаление канала ──────────────────────────────────────────────
+# ── Удаление канала ───────────────────────────────────────────────
 @router.message(Command("remove"))
 @router.message(F.text == "🗑 Удалить канал")
 async def cmd_remove(message: Message, db):
-    parts = message.text.split()
-    if len(parts) >= 2:
-        username = parts[1].lower().lstrip("@")
-        removed = await db.remove_channel(message.from_user.id, username)
-        if removed:
-            await message.answer(f"✅ Канал @{username} удалён.", reply_markup=main_keyboard())
-        else:
-            await message.answer(f"❌ Канал @{username} не найден.", reply_markup=main_keyboard())
-        return
+    parts = message.text.split(maxsplit=1)
+    if len(parts) == 2:
+        username = parse_channel_input(parts[1])
+        if username:
+            removed = await db.remove_channel(message.from_user.id, username)
+            if removed:
+                await message.answer(
+                    f"✅ Канал <code>@{he(username)}</code> удалён.",
+                    parse_mode="HTML",
+                    reply_markup=main_keyboard(),
+                )
+            else:
+                await message.answer(
+                    f"❌ Канал <code>@{he(username)}</code> не найден.",
+                    parse_mode="HTML",
+                    reply_markup=main_keyboard(),
+                )
+            return
 
     channels = await db.get_user_channels(message.from_user.id)
     if not channels:
         await message.answer("У тебя нет каналов для удаления.", reply_markup=main_keyboard())
         return
-    text = (
-        "Чтобы удалить канал, напиши:\n`/remove @username`\n\n"
-        "Твои каналы:\n" + "\n".join(f"• @{ch}" for ch in channels)
+    lines = "\n".join(f"• @{he(ch)}" for ch in channels)
+    await message.answer(
+        f"Чтобы удалить канал:\n<code>/remove @username</code>\n\nТвои каналы:\n{lines}",
+        parse_mode="HTML",
+        reply_markup=main_keyboard(),
     )
-    await message.answer(text, parse_mode="Markdown")
 
 
-# ── Интервал ─────────────────────────────────────────────────────
+# ── Интервал ──────────────────────────────────────────────────────
 @router.message(Command("interval"))
 @router.message(F.text == "⏱ Интервал")
 async def cmd_interval(message: Message, state: FSMContext, db):
@@ -180,20 +225,20 @@ async def cmd_interval(message: Message, state: FSMContext, db):
         if 1 <= hours <= 24:
             await db.set_user_interval(message.from_user.id, hours)
             await message.answer(
-                f"✅ Интервал установлен: *каждые {hours} ч.*",
-                parse_mode="Markdown",
+                f"✅ Интервал установлен: <b>каждые {hours} ч.</b>",
+                parse_mode="HTML",
                 reply_markup=main_keyboard(),
             )
         else:
-            await message.answer("❌ Введи число от 1 до 24.")
+            await message.answer("❌ Введи число от 1 до 24.", reply_markup=main_keyboard())
         return
 
     user = await db.get_user(message.from_user.id)
     current = user["interval_h"] if user else settings.DEFAULT_DIGEST_INTERVAL_HOURS
     await state.set_state(SetInterval.waiting_for_hours)
     await message.answer(
-        f"Текущий интервал: *{current} ч.*\n\nВведи новый (от 1 до 24 часов):",
-        parse_mode="Markdown",
+        f"Текущий интервал: <b>{current} ч.</b>\n\nВведи новый (от 1 до 24 часов):",
+        parse_mode="HTML",
         reply_markup=ReplyKeyboardRemove(),
     )
 
@@ -208,13 +253,13 @@ async def cmd_interval_input(message: Message, state: FSMContext, db):
     hours = int(text)
     await db.set_user_interval(message.from_user.id, hours)
     await message.answer(
-        f"✅ Интервал обновлён: *каждые {hours} ч.*",
-        parse_mode="Markdown",
+        f"✅ Интервал обновлён: <b>каждые {hours} ч.</b>",
+        parse_mode="HTML",
         reply_markup=main_keyboard(),
     )
 
 
-# ── Дайджест прямо сейчас ────────────────────────────────────────
+# ── Дайджест прямо сейчас ─────────────────────────────────────────
 @router.message(Command("digest"))
 @router.message(F.text == "📰 Дайджест сейчас")
 async def cmd_digest_now(message: Message, db):
@@ -240,6 +285,10 @@ async def cmd_digest_now(message: Message, db):
         )
     except Exception as e:
         logger.error("Manual digest error: %s", e)
-        await message.answer(f"❌ Ошибка при сборе новостей: {e}", reply_markup=main_keyboard())
+        await message.answer(
+            f"❌ Ошибка при сборе новостей:\n<code>{he(str(e))}</code>",
+            parse_mode="HTML",
+            reply_markup=main_keyboard(),
+        )
     finally:
         await client.disconnect()
