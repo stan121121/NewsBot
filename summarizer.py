@@ -179,32 +179,33 @@ async def summarize_posts(posts: list[Post]) -> list[DigestItem]:
         return []
 
 
-def format_digest_message(items: list[DigestItem], lang: str = "ru") -> str:
-    """Форматировать дайджест в Telegram-сообщение (Markdown)."""
-    if not items:
-        if lang == "ru":
-            return "📭 Новостей нет — всё тихо."
-        return "📭 No news — all quiet."
+def _he(text: str) -> str:
+    """HTML-escape для Telegram parse_mode=HTML."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-    header = "📰 *Дайджест новостей*\n\n" if lang == "ru" else "📰 *News Digest*\n\n"
+
+def format_digest_message(items: list[DigestItem], lang: str = "ru") -> str:
+    """Форматировать дайджест в Telegram-сообщение (HTML)."""
+    if not items:
+        return "📭 Новостей нет — всё тихо." if lang == "ru" else "📭 No news — all quiet."
+
+    header = "📰 <b>Дайджест новостей</b>\n\n" if lang == "ru" else "📰 <b>News Digest</b>\n\n"
     lines = [header]
 
     importance_emoji = {10: "🔴", 9: "🔴", 8: "🟠", 7: "🟠", 6: "🟡", 5: "🟡"}
 
     for item in items:
         emoji = importance_emoji.get(item.importance, "🟢")
-        # Экранируем символы Markdown в title
-        safe_title = item.title.replace("*", "\\*").replace("_", "\\_")
         lines.append(
-            f"{emoji} *{safe_title}*\n"
-            f"{item.summary}\n"
-            f"_📣 {item.channel}_ | [Читать →]({item.url})\n"
+            f'{emoji} <b>{_he(item.title)}</b>\n'
+            f'{_he(item.summary)}\n'
+            f'<i>📣 {_he(item.channel)}</i> | <a href="{item.url}">Читать →</a>\n'
         )
 
     model_short = settings.OPENROUTER_MODEL.split("/")[-1]
     footer = (
-        f"\n⏰ _Следующий дайджест через {settings.DEFAULT_DIGEST_INTERVAL_HOURS} ч._"
-        f"\n🤖 _{model_short}_"
+        f"\n⏰ <i>Следующий дайджест через {settings.DEFAULT_DIGEST_INTERVAL_HOURS} ч.</i>"
+        f"\n🤖 <i>{_he(model_short)}</i>"
     )
     lines.append(footer)
 
