@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     OPENROUTER_API_KEY: str
 
     # Модель OpenRouter
-    OPENROUTER_MODEL: str = "google/gemini-flash-1.5"
+    OPENROUTER_MODEL: str = "liquid/lfm-2.5-1.2b-instruct:free"
 
     # Интервал между дайджестами (часы)
     DEFAULT_DIGEST_INTERVAL_HOURS: int = 1
