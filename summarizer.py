@@ -1,6 +1,6 @@
 """
 summarizer.py — фильтрация и суммаризация новостей через OpenRouter
-OpenRouter — OpenAI-совместимый прокси: https://openrouter.ai/docs
+с группировкой по категориям.
 """
 import json
 import logging
@@ -18,9 +18,15 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 HEADERS = {
     "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
     "Content-Type": "application/json",
-    "HTTP-Referer": "https://github.com/newsdigestbot",   # рекомендует OpenRouter
+    "HTTP-Referer": "https://github.com/newsdigestbot",
     "X-Title": "News Digest Bot",
 }
+
+# Список категорий для использования в промпте и сортировке
+CATEGORIES_RU = ["Политика", "Экономика", "Общество", "Технологии",
+                 "Спорт", "Культура", "Происшествия", "Наука", "Другое"]
+CATEGORIES_EN = ["Politics", "Economy", "Society", "Technology",
+                 "Sports", "Culture", "Incidents", "Science", "Other"]
 
 LANG_PROMPTS = {
     "ru": {
@@ -42,10 +48,11 @@ LANG_PROMPTS = {
             '  "summary"    — краткое изложение (2–3 предложения)\n'
             '  "importance" — оценка важности 1–10\n'
             '  "channel"    — название канала\n'
-            '  "url"        — ссылка на пост\n\n'
+            '  "url"        — ссылка на пост\n'
+            '  "category"   — категория из списка: {categories}\n\n'
             "Посты:\n{posts_text}\n\n"
             "Верни только JSON-массив, например:\n"
-            '[{{"title":"...", "summary":"...", "importance":8, "channel":"...", "url":"..."}}]'
+            '[{{"title":"...", "summary":"...", "importance":8, "channel":"...", "url":"...", "category":"Политика"}}]'
         ),
     },
     "en": {
@@ -62,10 +69,11 @@ LANG_PROMPTS = {
             '  "summary"    — 2–3 sentence summary\n'
             '  "importance" — score 1–10\n'
             '  "channel"    — channel name\n'
-            '  "url"        — post link\n\n'
+            '  "url"        — post link\n'
+            '  "category"   — category from list: {categories}\n\n'
             "Posts:\n{posts_text}\n\n"
             "Return only a JSON array:\n"
-            '[{{"title":"...", "summary":"...", "importance":8, "channel":"...", "url":"..."}}]'
+            '[{{"title":"...", "summary":"...", "importance":8, "channel":"...", "url":"...", "category":"Politics"}}]'
         ),
     },
 }
@@ -78,6 +86,7 @@ class DigestItem:
     importance: int
     channel: str
     url: str
+    category: str = "Другое"  # значение по умолчанию
 
 
 def _format_posts_for_prompt(posts: list[Post]) -> str:
@@ -95,23 +104,28 @@ def _format_posts_for_prompt(posts: list[Post]) -> str:
 
 
 async def summarize_posts(posts: list[Post]) -> list[DigestItem]:
-    """Отправить посты в OpenRouter, получить отфильтрованный дайджест."""
+    """Отправить посты в OpenRouter, получить отфильтрованный дайджест с категориями."""
     if not posts:
         return []
 
     lang = settings.DIGEST_LANGUAGE
     prompts = LANG_PROMPTS.get(lang, LANG_PROMPTS["ru"])
 
+    # Выбираем список категорий в зависимости от языка
+    categories_list = CATEGORIES_RU if lang == "ru" else CATEGORIES_EN
+    categories_str = ", ".join(categories_list)
+
     posts_text = _format_posts_for_prompt(posts)
     user_msg = prompts["user_tmpl"].format(
         count=len(posts),
         max_news=settings.MAX_NEWS_IN_DIGEST,
+        categories=categories_str,
         posts_text=posts_text,
     )
 
     payload = {
         "model": settings.OPENROUTER_MODEL,
-        "max_tokens": 1000,
+        "max_tokens": 2000,  # при необходимости можно уменьшить
         "temperature": 0.3,
         "messages": [
             {"role": "system", "content": prompts["system"]},
@@ -133,27 +147,33 @@ async def summarize_posts(posts: list[Post]) -> list[DigestItem]:
 
         raw: str = data["choices"][0]["message"]["content"].strip()
 
-        # Убираем возможные маркдаун-бэктики, которые модель всё равно вставляет
+        # Убираем возможные маркдаун-бэктики
         if "```" in raw:
             parts = raw.split("```")
-            # берём первый блок после открывающего бэктика
             raw = parts[1] if len(parts) > 1 else parts[0]
             if raw.startswith("json"):
                 raw = raw[4:]
         raw = raw.strip()
 
         items_data: list[dict] = json.loads(raw)
-        items = [
-            DigestItem(
-                title=str(d.get("title", "")).strip(),
-                summary=str(d.get("summary", "")).strip(),
-                importance=int(d.get("importance", 5)),
-                channel=str(d.get("channel", "")).strip(),
-                url=str(d.get("url", "")).strip(),
+        items = []
+        for d in items_data:
+            if not isinstance(d, dict):
+                continue
+            category = d.get("category", "").strip()
+            # Если модель вернула категорию не из списка, заменяем на "Другое"/"Other"
+            if category not in categories_list:
+                category = "Другое" if lang == "ru" else "Other"
+            items.append(
+                DigestItem(
+                    title=str(d.get("title", "")).strip(),
+                    summary=str(d.get("summary", "")).strip(),
+                    importance=int(d.get("importance", 5)),
+                    channel=str(d.get("channel", "")).strip(),
+                    url=str(d.get("url", "")).strip(),
+                    category=category,
+                )
             )
-            for d in items_data
-            if isinstance(d, dict)
-        ]
         items.sort(key=lambda x: x.importance, reverse=True)
         logger.info("Got %d digest items from OpenRouter", len(items))
 
@@ -172,10 +192,10 @@ async def summarize_posts(posts: list[Post]) -> list[DigestItem]:
         logger.error("OpenRouter HTTP error %s: %s", e.response.status_code, e.response.text)
         return []
     except json.JSONDecodeError as e:
-        logger.error("JSON parse error: %s | raw response: %.300s", e, raw)
+        logger.error("JSON parse error: %s | raw response: %.300s", e, raw if 'raw' in locals() else '')
         return []
     except Exception as e:
-        logger.error("Summarization error: %s", e)
+        logger.error("Summarization error: %s", e, exc_info=True)
         return []
 
 
@@ -185,27 +205,45 @@ def _he(text: str) -> str:
 
 
 def format_digest_message(items: list[DigestItem], lang: str = "ru") -> str:
-    """Форматировать дайджест в Telegram-сообщение (HTML)."""
+    """Форматировать дайджест с группировкой по категориям."""
     if not items:
         return "📭 Новостей нет — всё тихо." if lang == "ru" else "📭 No news — all quiet."
+
+    # Группируем новости по категориям
+    grouped = {}
+    for item in items:
+        cat = item.category
+        if cat not in grouped:
+            grouped[cat] = []
+        grouped[cat].append(item)
+
+    # Определяем порядок вывода категорий (на основе предопределённого списка)
+    order = CATEGORIES_RU if lang == "ru" else CATEGORIES_EN
+    # Добавляем категории, которых нет в order (маловероятно) в конец
+    existing_cats = set(grouped.keys())
+    sorted_cats = [cat for cat in order if cat in existing_cats] + [cat for cat in existing_cats if cat not in order]
 
     header = "📰 <b>Дайджест новостей</b>\n\n" if lang == "ru" else "📰 <b>News Digest</b>\n\n"
     lines = [header]
 
     importance_emoji = {10: "🔴", 9: "🔴", 8: "🟠", 7: "🟠", 6: "🟡", 5: "🟡"}
 
-    for item in items:
-        emoji = importance_emoji.get(item.importance, "🟢")
-        lines.append(
-            f'{emoji} <b>{_he(item.title)}</b>\n'
-            f'{_he(item.summary)}\n'
-            f'<i>📣 {_he(item.channel)}</i> | <a href="{item.url}">Читать →</a>\n'
-        )
+    for cat in sorted_cats:
+        # Заголовок категории
+        lines.append(f"<b>{cat}</b>")
+        for item in grouped[cat]:
+            emoji = importance_emoji.get(item.importance, "🟢")
+            lines.append(
+                f'{emoji} <b>{_he(item.title)}</b>\n'
+                f'{_he(item.summary)}\n'
+                f'<i>📣 {_he(item.channel)}</i> | <a href="{item.url}">Читать →</a>\n'
+            )
+        lines.append("")  # пустая строка между категориями
 
     model_short = settings.OPENROUTER_MODEL.split("/")[-1]
     footer = (
-        f"\n⏰ <i>Следующий дайджест через {settings.DEFAULT_DIGEST_INTERVAL_HOURS} ч.</i>"
-        f"\n🤖 <i>{_he(model_short)}</i>"
+        f"⏰ <i>Следующий дайджест через {settings.DEFAULT_DIGEST_INTERVAL_HOURS} ч.</i>\n"
+        f"🤖 <i>{_he(model_short)}</i>"
     )
     lines.append(footer)
 
