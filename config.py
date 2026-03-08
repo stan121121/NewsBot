@@ -15,13 +15,13 @@ class Settings(BaseSettings):
     OPENROUTER_MODEL: str = "liquid/lfm-2.5-1.2b-instruct:free"
 
     # Интервал между дайджестами (часы)
-    DEFAULT_DIGEST_INTERVAL_HOURS: int = 5
+    DEFAULT_DIGEST_INTERVAL_HOURS: int = 6
 
     # Постов с каждого канала
-    POSTS_PER_CHANNEL: int = 25
+    POSTS_PER_CHANNEL: int = 10
 
     # Максимум новостей в дайджесте
-    MAX_NEWS_IN_DIGEST: int = 25
+    MAX_NEWS_IN_DIGEST: int = 15
 
     # Язык дайджеста (ru / en)
     DIGEST_LANGUAGE: str = "ru"
